@@ -186,11 +186,13 @@ static int pack_keywords(struct winevtlog_config *ctx, uint64_t keywords)
 
 static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
 {
-    CHAR buf[64];
-    size_t len = 0;
+    CHAR buf[70]; // Buffer for date-time formatting with additional space for milliseconds
+    CHAR final_buf[80]; // Final buffer to include milliseconds
+    size_t len = 0; 
     _locale_t locale;
     TIME_ZONE_INFORMATION tzi;
-    SYSTEMTIME st_local;
+    SYSTEMTIME  st_local;
+    int milliseconds;
 
     GetTimeZoneInformation(&tzi);
 
@@ -200,6 +202,7 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
     }
     if (st != NULL) {
         SystemTimeToTzSpecificLocalTime(&tzi, st, &st_local);
+        milliseconds = st_local.wMilliseconds; // Get milliseconds
 
         struct tm tm = {st_local.wSecond,
                         st_local.wMinute,
@@ -209,14 +212,18 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
                         st_local.wYear-1900,
                         st_local.wDayOfWeek, 0, 0};
         len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
+         len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);  
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
             return -1;
         }
+        // Append milliseconds to the formatted string
+        // Ensuring the final_buf includes the original formatted date-time and milliseconds
+        snprintf(final_buf, sizeof(final_buf), "%s.%03d", buf, milliseconds);
         _free_locale(locale);
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+        flb_log_event_encoder_append_body_string(ctx->log_encoder, final_buf, strlen(final_buf));
     }
     else {
         return -1;
@@ -228,11 +235,13 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
 static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
 {
     LARGE_INTEGER timestamp;
-    CHAR buf[64];
+    CHAR buf[70]; // Buffer for initial formatting
+    CHAR final_buf[80]; // Buffer to include milliseconds
     size_t len = 0;
     FILETIME ft, ft_local;
     SYSTEMTIME st;
     _locale_t locale;
+    int milliseconds;
 
     locale = _get_current_locale();
     if (locale == NULL) {
@@ -243,16 +252,22 @@ static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
     ft.dwLowDateTime = timestamp.LowPart;
     FileTimeToLocalFileTime(&ft, &ft_local);
     if (FileTimeToSystemTime(&ft_local, &st)) {
+        // Retrieve milliseconds from SYSTEMTIME
+        milliseconds = st.wMilliseconds;
         struct tm tm = {st.wSecond, st.wMinute, st.wHour, st.wDay, st.wMonth-1, st.wYear-1900, st.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
+        // Format date and time up to seconds including timezone
+        len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
             return -1;
         }
+         // Append milliseconds to the formatted string
+        snprintf(final_buf, sizeof(final_buf), "%s.%03d", buf, milliseconds);
         _free_locale(locale);
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+   // Append the final formatted string with milliseconds to the log
+        flb_log_event_encoder_append_body_string(ctx->log_encoder, final_buf, strlen(final_buf));
     }
     else {
         return -1;
