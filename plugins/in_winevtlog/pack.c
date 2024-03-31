@@ -27,8 +27,14 @@
 #include <sddl.h>
 #include <locale.h>
 #include "winevtlog.h"
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#define FORMAT_ISO8601 "%Y-%m-%d %H:%M:%S %z"
+
+//#define FORMAT_ISO8601 "%Y-%m-%d %H:%M:%S %z"
+#define FORMAT_ISO8601 "%Y-%m-%d %H:%M:%S" // Basic format without timezone
 
 #define BINDATA(evt) ((unsigned char *) (evt) + (evt)->DataOffset)
 
@@ -184,31 +190,43 @@ static int pack_keywords(struct winevtlog_config *ctx, uint64_t keywords)
     return 0;
 }
 
-static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
-{
-    CHAR buf[64]; // Buffer for the date and time up to seconds
-    CHAR finalBuf[128]; // Buffer to include milliseconds and timezone
+// Function to format timezone offset into +/-HHMM format
+void format_timezone_offset(CHAR* buffer, size_t bufferSize, const TIME_ZONE_INFORMATION* tzi) {
+    LONG totalOffset = tzi->Bias;
+    if (tzi->StandardDate.wMonth != 0) { // Check if there is a daylight saving adjustment
+        totalOffset += tzi->StandardBias + tzi->DaylightBias;
+    }
+    
+    // Convert to +/-HH:MM format
+    int hours = totalOffset / 60;
+    int minutes = abs(totalOffset % 60);
+    snprintf(buffer, bufferSize, "%+03d:%02d", -hours, minutes); // Negate hours to align with common timezone formats
+}
+
+// Modified pack_systemtime function
+static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st) {
+    CHAR buf[64]; // Buffer for date and time up to seconds
+    CHAR finalBuf[128]; // Buffer for final string including milliseconds and timezone
+    CHAR timezoneBuffer[10]; // Buffer for timezone offset "+/-HH:MM"
     size_t len = 0;
     _locale_t locale;
     TIME_ZONE_INFORMATION tzi;
-    SYSTEMTIME st_local;
-
-    GetTimeZoneInformation(&tzi);
 
     locale = _get_current_locale();
     if (locale == NULL) {
         return -1;
     }
-    if (st != NULL) {
-        SystemTimeToTzSpecificLocalTime(&tzi, st, &st_local);
 
-        struct tm tm = {st_local.wSecond,
-                        st_local.wMinute,
-                        st_local.wHour,
-                        st_local.wDay,
-                        st_local.wMonth-1,
-                        st_local.wYear-1900,
-                        st_local.wDayOfWeek, 0, 0};
+    // Get timezone information
+    GetTimeZoneInformation(&tzi);
+    format_timezone_offset(timezoneBuffer, sizeof(timezoneBuffer), &tzi);
+
+    if (st != NULL) {
+        struct tm tm = {
+            st->wSecond, st->wMinute, st->wHour,
+            st->wDay, st->wMonth - 1, st->wYear - 1900,
+            st->wDayOfWeek, 0, 0
+        };
         len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
@@ -216,9 +234,8 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
             return -1;
         }
 
-        // Append milliseconds to the formatted string
-        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d", buf, st_local.wMilliseconds);
-        // If you need to add timezone information, append it here
+        // Manually format and append milliseconds and timezone offset to the string
+        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d %s", buf, st->wMilliseconds, timezoneBuffer);
 
         _free_locale(locale);
 
@@ -231,37 +248,47 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
     return 0;
 }
 
-static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
-{
+
+// Function to pack file time
+static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime) {
     LARGE_INTEGER timestamp;
     CHAR buf[64]; // Buffer for date and time up to seconds
-    CHAR finalBuf[128]; // Buffer for final string including milliseconds
+    CHAR finalBuf[128]; // Buffer for final string including milliseconds and timezone
+    CHAR timezoneBuffer[10]; // Buffer for timezone offset "+/-HH:MM"
     size_t len = 0;
     FILETIME ft, ft_local;
     SYSTEMTIME st;
     _locale_t locale;
+    TIME_ZONE_INFORMATION tzi;
 
     locale = _get_current_locale();
     if (locale == NULL) {
         return -1;
     }
+
+    // Get timezone information
+    GetTimeZoneInformation(&tzi);
+    format_timezone_offset(timezoneBuffer, sizeof(timezoneBuffer), &tzi);
 
     timestamp.QuadPart = filetime;
     ft.dwHighDateTime = timestamp.HighPart;
     ft.dwLowDateTime = timestamp.LowPart;
     FileTimeToLocalFileTime(&ft, &ft_local);
     if (FileTimeToSystemTime(&ft_local, &st)) {
-        struct tm tm = {st.wSecond, st.wMinute, st.wHour, st.wDay, st.wMonth-1, st.wYear-1900, st.wDayOfWeek, 0, 0};
+        struct tm tm = {
+            st.wSecond, st.wMinute, st.wHour,
+            st.wDay, st.wMonth - 1, st.wYear - 1900,
+            st.wDayOfWeek, 0, 0
+        };
         len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
             return -1;
         }
-        
-        // Append milliseconds to the formatted string
-        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d", buf, st.wMilliseconds);
-        // If you need to add timezone information, append it here
+
+        // Manually format and append milliseconds and timezone offset to the string
+        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d %s", buf, st.wMilliseconds, timezoneBuffer);
 
         _free_locale(locale);
 
@@ -273,6 +300,7 @@ static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
 
     return 0;
 }
+
 
 static int pack_sid(struct winevtlog_config *ctx, PSID sid)
 {
