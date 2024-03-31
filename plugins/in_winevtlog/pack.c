@@ -186,7 +186,8 @@ static int pack_keywords(struct winevtlog_config *ctx, uint64_t keywords)
 
 static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
 {
-    CHAR buf[64];
+    CHAR buf[64]; // Buffer for the date and time up to seconds
+    CHAR finalBuf[128]; // Buffer to include milliseconds and timezone
     size_t len = 0;
     _locale_t locale;
     TIME_ZONE_INFORMATION tzi;
@@ -208,15 +209,20 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
                         st_local.wMonth-1,
                         st_local.wYear-1900,
                         st_local.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
+        len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
             return -1;
         }
+
+        // Append milliseconds to the formatted string
+        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d", buf, st_local.wMilliseconds);
+        // If you need to add timezone information, append it here
+
         _free_locale(locale);
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+        flb_log_event_encoder_append_body_string(ctx->log_encoder, finalBuf, strlen(finalBuf));
     }
     else {
         return -1;
@@ -228,7 +234,8 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
 static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
 {
     LARGE_INTEGER timestamp;
-    CHAR buf[64];
+    CHAR buf[64]; // Buffer for date and time up to seconds
+    CHAR finalBuf[128]; // Buffer for final string including milliseconds
     size_t len = 0;
     FILETIME ft, ft_local;
     SYSTEMTIME st;
@@ -238,21 +245,27 @@ static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
     if (locale == NULL) {
         return -1;
     }
+
     timestamp.QuadPart = filetime;
     ft.dwHighDateTime = timestamp.HighPart;
     ft.dwLowDateTime = timestamp.LowPart;
     FileTimeToLocalFileTime(&ft, &ft_local);
     if (FileTimeToSystemTime(&ft_local, &st)) {
         struct tm tm = {st.wSecond, st.wMinute, st.wHour, st.wDay, st.wMonth-1, st.wYear-1900, st.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
+        len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
             return -1;
         }
+        
+        // Append milliseconds to the formatted string
+        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d", buf, st.wMilliseconds);
+        // If you need to add timezone information, append it here
+
         _free_locale(locale);
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+        flb_log_event_encoder_append_body_string(ctx->log_encoder, finalBuf, strlen(finalBuf));
     }
     else {
         return -1;
