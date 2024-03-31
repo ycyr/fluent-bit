@@ -184,82 +184,116 @@ static int pack_keywords(struct winevtlog_config *ctx, uint64_t keywords)
     return 0;
 }
 
-static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
-{
-    CHAR buf[64];
-    size_t len = 0;
-    _locale_t locale;
-    TIME_ZONE_INFORMATION tzi;
-    SYSTEMTIME st_local;
 
-    GetTimeZoneInformation(&tzi);
 
-    locale = _get_current_locale();
-    if (locale == NULL) {
-        return -1;
+static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st) {
+  CHAR buf[64];
+  size_t len = 0;
+  _locale_t locale;
+  TIME_ZONE_INFORMATION tzi;
+  SYSTEMTIME st_local;
+
+  GetTimeZoneInformation(&tzi);
+
+  locale = _get_current_locale();
+  if (locale == NULL) {
+    return -1;
+  }
+  if (st != NULL) {
+    SystemTimeToTzSpecificLocalTime(&tzi, st, &st_local);
+
+    // Use GetDateFormatEx and GetTimeFormatEx (Windows-specific)
+    WCHAR wbuf[64];
+    SYSTEMTIME wtm = {st_local.wYear, st_local.wMonth, st_local.wDayOfWeek,
+                     st_local.wDay, st_local.wHour, st_local.wMinute, st_local.wSecond, 0};
+
+    // Format date (assuming YYYY-MM-DD format)
+    GetDateFormatEx(LOCALE_USER_DEFAULT, DATE_FORMAT_ISO8601, &wtm, L"%Y-%m-%d", wbuf, sizeof(wbuf));
+
+    // Format time with milliseconds
+    GetTimeFormatEx(LOCALE_USER_DEFAULT, 0, &wtm, L"%H:%M:%S.%L", wbuf + wcslen(wbuf), sizeof(wbuf) - wcslen(wbuf));
+
+    // Convert wide char buffer to char buffer (if needed)
+    len = wcstombs(buf, wbuf, sizeof(buf));
+    if (len == -1) {
+      flb_errno();
+      _free_locale(locale);
+      return -1;
     }
-    if (st != NULL) {
-        SystemTimeToTzSpecificLocalTime(&tzi, st, &st_local);
 
-        struct tm tm = {st_local.wSecond,
-                        st_local.wMinute,
-                        st_local.wHour,
-                        st_local.wDay,
-                        st_local.wMonth-1,
-                        st_local.wYear-1900,
-                        st_local.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
-        if (len == 0) {
-            flb_errno();
-            _free_locale(locale);
-            return -1;
-        }
-        _free_locale(locale);
+    flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+  } else {
+    return -1;
+  }
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
-    }
-    else {
-        return -1;
-    }
-
-    return 0;
+  _free_locale(locale);
+  return 0;
 }
 
-static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime)
-{
-    LARGE_INTEGER timestamp;
-    CHAR buf[64];
-    size_t len = 0;
-    FILETIME ft, ft_local;
-    SYSTEMTIME st;
-    _locale_t locale;
 
-    locale = _get_current_locale();
-    if (locale == NULL) {
-        return -1;
-    }
-    timestamp.QuadPart = filetime;
-    ft.dwHighDateTime = timestamp.HighPart;
-    ft.dwLowDateTime = timestamp.LowPart;
-    FileTimeToLocalFileTime(&ft, &ft_local);
-    if (FileTimeToSystemTime(&ft_local, &st)) {
-        struct tm tm = {st.wSecond, st.wMinute, st.wHour, st.wDay, st.wMonth-1, st.wYear-1900, st.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
-        if (len == 0) {
-            flb_errno();
-            _free_locale(locale);
-            return -1;
-        }
-        _free_locale(locale);
+static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime) {
+  LARGE_INTEGER timestamp;
+  CHAR buf[64];
+  size_t len = 0;
+  _locale_t locale;
+  FILETIME ft, ft_local;
+  SYSTEMTIME st, wtm;
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
-    }
-    else {
-        return -1;
+  locale = _get_current_locale();
+  if (locale == NULL) {
+    return -1;
+  }
+
+  timestamp.QuadPart = filetime;
+  ft.dwHighDateTime = timestamp.HighPart;
+  ft.dwLowDateTime = timestamp.LowPart;
+  FileTimeToLocalFileTime(&ft, &ft_local);
+  if (FileTimeToSystemTime(&ft_local, &st)) {
+    // Use GetDateFormatEx and GetTimeFormatEx (Windows-specific)
+    WCHAR wbuf[64];
+
+    // Convert SYSTEMTIME to wide char SYSTEMTIME
+    wtm.wYear = st.wYear;
+    wtm.wMonth = st.wMonth;
+    wtm.wDayOfWeek = st.wDayOfWeek;
+    wtm.wDay = st.wDay;
+    wtm.wHour = st.wHour;
+    wtm.wMinute = st.wMinute;
+    wtm.wSecond = st.wSecond;
+    wtm.wMilliseconds = 0;  // Milliseconds will be obtained separately
+
+    // Format date (assuming YYYY-MM-DD format)
+    GetDateFormatEx(LOCALE_USER_DEFAULT, DATE_FORMAT_ISO8601, &wtm, L"%Y-%m-%d", wbuf, sizeof(wbuf));
+
+    // Get milliseconds using GetSystemTimePreciseAsFileTime()
+    FILETIME ft_precise;
+    GetSystemTimePreciseAsFileTime(&ft_precise);
+    ULARGE_INTEGER uliTime;
+    uliTime.LowPart = ft_precise.dwLowDateTime;
+    uliTime.HighPart = ft_precise.dwHighDateTime;
+    long milliseconds = (uliTime.QuadPart - EPOCH_FILETIME) / 10000;
+
+    // Format time milliseconds using wsprintf
+    wsprintf(wbuf + wcslen(wbuf), L".%03ld", milliseconds);
+
+    // Convert wide char buffer to char buffer (if needed)
+    len = wcstombs(buf, wbuf, sizeof(buf));
+    if (len == -1) {
+      flb_errno();
+      _free_locale(locale);
+      return -1;
     }
 
-    return 0;
+    flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+  } else {
+    return -1;
+  }
+
+  _free_locale(locale);
+  return 0;
 }
+
+
 
 static int pack_sid(struct winevtlog_config *ctx, PSID sid)
 {
