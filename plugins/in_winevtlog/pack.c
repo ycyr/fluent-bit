@@ -32,8 +32,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-
 #define FORMAT_ISO8601 "%Y-%m-%d %H:%M:%S" 
 
 #define BINDATA(evt) ((unsigned char *) (evt) + (evt)->DataOffset)
@@ -222,11 +220,13 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st) {
     format_timezone_offset(timezoneBuffer, sizeof(timezoneBuffer), &tzi);
 
     if (st != NULL) {
-        struct tm tm = {
-            st->wSecond, st->wMinute, st->wHour,
-            st->wDay, st->wMonth - 1, st->wYear - 1900,
-            st->wDayOfWeek, 0, 0
-        };
+        struct tm tm = {st->wSecond,
+                        st->wMinute, 
+                        st->wHour,
+                        st->wDay, 
+                        st->wMonth-1,
+                        st->wYear-1900,
+                        st->wDayOfWeek, 0, 0};
         len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
@@ -248,8 +248,6 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st) {
     return 0;
 }
 
-
-// Function to pack file time
 static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime) {
     LARGE_INTEGER timestamp;
     CHAR buf[64]; // Buffer for date and time up to seconds
@@ -279,7 +277,7 @@ static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime) {
             st.wSecond, st.wMinute, st.wHour,
             st.wDay, st.wMonth - 1, st.wYear - 1900,
             st.wDayOfWeek, 0, 0
-        };
+            };
         len = _strftime_l(buf, sizeof(buf), FORMAT_ISO8601, &tm, locale);
         if (len == 0) {
             flb_errno();
@@ -300,7 +298,6 @@ static int pack_filetime(struct winevtlog_config *ctx, ULONGLONG filetime) {
 
     return 0;
 }
-
 
 static int pack_sid(struct winevtlog_config *ctx, PSID sid)
 {
