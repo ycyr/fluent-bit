@@ -33,7 +33,6 @@
 #include <string.h>
 
 #define FORMAT_ISO8601 "%Y-%m-%d %H:%M:%S %z"
-#define FORMAT_SYSTEMTIME "%Y-%m-%d %H:%M:%S" 
 
 #define BINDATA(evt) ((unsigned char *) (evt) + (evt)->DataOffset)
 
@@ -228,7 +227,7 @@ static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
                         st.wMonth-1,
                         st.wYear-1900,
                         st.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, sizeof(buf), FORMAT_SYSTEMTIME, &tm, locale);
+        len = _strftime_l(buf, 64, "%Y-%m-%d %H:%M:%S", &tm, locale);
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
