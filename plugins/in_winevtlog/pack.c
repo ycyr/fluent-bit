@@ -27,10 +27,29 @@
 #include <sddl.h>
 #include <locale.h>
 #include "winevtlog.h"
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define FORMAT_ISO8601 "%Y-%m-%d %H:%M:%S %z"
+#define FORMAT_SYSTEMTIME "%Y-%m-%d %H:%M:%S" 
 
 #define BINDATA(evt) ((unsigned char *) (evt) + (evt)->DataOffset)
+
+// Function to format timezone offset into +/-HHMM format
+void format_timezone_offset(CHAR* buffer, size_t bufferSize, const TIME_ZONE_INFORMATION* tzi) {
+    LONG totalOffset = tzi->Bias;
+    if (tzi->StandardDate.wMonth != 0) { // Check if there is a daylight saving adjustment
+        totalOffset += tzi->StandardBias + tzi->DaylightBias;
+    }
+
+    // Convert to +/-HH:MM format
+    int hours = totalOffset / 60;
+    int minutes = abs(totalOffset % 60);
+    snprintf(buffer, bufferSize, "%+03d:%02d", -hours, minutes); // Negate hours to align with common timezone formats
+}
+
 
 static int pack_nullstr(struct winevtlog_config *ctx)
 {
@@ -186,37 +205,40 @@ static int pack_keywords(struct winevtlog_config *ctx, uint64_t keywords)
 
 static int pack_systemtime(struct winevtlog_config *ctx, SYSTEMTIME *st)
 {
-    CHAR buf[64];
+    CHAR buf[64]; // Buffer for date and time up to seconds
+    CHAR finalBuf[128]; // Buffer for final string including milliseconds and timezone
+    CHAR timezoneBuffer[10]; // Buffer for timezone offset "+/-HH:MM"
     size_t len = 0;
     _locale_t locale;
     TIME_ZONE_INFORMATION tzi;
-    SYSTEMTIME st_local;
+
 
     GetTimeZoneInformation(&tzi);
+    format_timezone_offset(timezoneBuffer, sizeof(timezoneBuffer), &tzi);
 
     locale = _get_current_locale();
     if (locale == NULL) {
         return -1;
     }
     if (st != NULL) {
-        SystemTimeToTzSpecificLocalTime(&tzi, st, &st_local);
-
-        struct tm tm = {st_local.wSecond,
-                        st_local.wMinute,
-                        st_local.wHour,
-                        st_local.wDay,
-                        st_local.wMonth-1,
-                        st_local.wYear-1900,
-                        st_local.wDayOfWeek, 0, 0};
-        len = _strftime_l(buf, 64, FORMAT_ISO8601, &tm, locale);
+        struct tm tm = {st.wSecond,
+                        st.wMinute, 
+                        st.wHour,
+                        st.wDay, 
+                        st.wMonth-1,
+                        st.wYear-1900,
+                        st.wDayOfWeek, 0, 0};
+        len = _strftime_l(buf, sizeof(buf), FORMAT_SYSTEMTIME, &tm, locale);
         if (len == 0) {
             flb_errno();
             _free_locale(locale);
             return -1;
         }
+        // Manually format and append milliseconds and timezone offset to the string
+        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d %s", buf, st.wMilliseconds, timezoneBuffer);
         _free_locale(locale);
 
-        flb_log_event_encoder_append_body_string(ctx->log_encoder, buf, len);
+        flb_log_event_encoder_append_body_string(ctx->log_encoder, finalBuf, strlen(finalBuf));
     }
     else {
         return -1;
