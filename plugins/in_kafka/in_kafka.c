@@ -155,6 +155,7 @@ static int in_kafka_collect(struct flb_input_instance *ins,
                             struct flb_config *config, void *in_context)
 {
     int ret;
+    int message_count = 0;  // Initialize a counter for the messages
     struct flb_in_kafka_config *ctx = in_context;
     rd_kafka_message_t *rkm;
 
@@ -177,17 +178,26 @@ static int in_kafka_collect(struct flb_input_instance *ins,
         flb_plg_debug(ins, "kafka message received");
 
         ret = process_message(ctx, rkm);
+        message_count++;  // Increment the message counter
 
         rd_kafka_message_destroy(rkm);
 
-        /* TO-DO: commit the record based on `ret` */
-        rd_kafka_commit(ctx->kafka.rk, NULL, 0);
+        /* Commit the record after every 1000 messages */
+        if (message_count >= 1000) {
+            rd_kafka_commit(ctx->kafka.rk, NULL, 0);
+            message_count = 0;  // Reset the counter
+        }
 
         /* Break from the loop when reaching the limit of polling if available */
         if (ctx->polling_threshold != FLB_IN_KAFKA_UNLIMITED &&
             ctx->log_encoder->output_length > ctx->polling_threshold + 512) {
             break;
         }
+    }
+
+    /* Commit any remaining messages if the loop exits before reaching 1000 */
+    if (message_count > 0) {
+        rd_kafka_commit(ctx->kafka.rk, NULL, 0);
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
