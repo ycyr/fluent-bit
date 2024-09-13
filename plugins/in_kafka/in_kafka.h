@@ -48,6 +48,8 @@ struct flb_in_kafka_config {
     int coll_fd;
     size_t buffer_max_size;          /* Maximum size of chunk allocation */
     size_t polling_threshold;
+    size_t commit_count;
+    size_t commit_interval;
 };
 
 #endif

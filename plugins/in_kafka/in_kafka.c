@@ -178,16 +178,30 @@ static int in_kafka_collect(struct flb_input_instance *ins,
 
         ret = process_message(ctx, rkm);
 
+        /* Manually store the offset */
+        rd_kafka_offset_store(rkm->rkt, rkm->partition, rkm->offset + 1);
+
         rd_kafka_message_destroy(rkm);
 
-        /* TO-DO: commit the record based on `ret` */
-        rd_kafka_commit(ctx->kafka.rk, NULL, 0);
+        ctx->commit_count++;
+
+        /* Commit offsets after reaching the commit interval */
+        if (ctx->commit_count >= ctx->commit_interval) {
+            rd_kafka_commit(ctx->kafka.rk, NULL, 1); // Asynchronous commit
+            ctx->commit_count = 0;
+        }
 
         /* Break from the loop when reaching the limit of polling if available */
         if (ctx->polling_threshold != FLB_IN_KAFKA_UNLIMITED &&
             ctx->log_encoder->output_length > ctx->polling_threshold + 512) {
             break;
         }
+    }
+
+    /* Commit any remaining offsets after the loop */
+    if (ctx->commit_count > 0) {
+        rd_kafka_commit(ctx->kafka.rk, NULL, 1); // Asynchronous commit
+        ctx->commit_count = 0;
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
@@ -237,9 +251,31 @@ static int in_kafka_init(struct flb_input_instance *ins,
         return -1;
     }
 
+    /* Initialize commit_count and commit_interval */
+    ctx->commit_count = 0;
+    ctx->commit_interval = 1000; // Adjust this value as needed
+
     kafka_conf = flb_kafka_conf_create(&ctx->kafka, &ins->properties, 1);
     if (!kafka_conf) {
         flb_plg_error(ins, "Could not initialize kafka config object");
+        goto init_error;
+    }
+
+    /* Disable automatic offset commits */
+    res = rd_kafka_conf_set(kafka_conf, "enable.auto.commit", "false",
+                            errstr, sizeof(errstr));
+    if (res != RD_KAFKA_CONF_OK) {
+        flb_plg_error(ins, "Failed to set enable.auto.commit: %s",
+                      errstr);
+        goto init_error;
+    }
+
+    /* Disable automatic offset store */
+    res = rd_kafka_conf_set(kafka_conf, "enable.auto.offset.store", "false",
+                            errstr, sizeof(errstr));
+    if (res != RD_KAFKA_CONF_OK) {
+        flb_plg_error(ins, "Failed to set enable.auto.offset.store: %s",
+                      errstr);
         goto init_error;
     }
 
