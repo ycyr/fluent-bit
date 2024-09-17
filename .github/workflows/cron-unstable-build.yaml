@@ -11,9 +11,9 @@ on:
         required: true
 
   # Run nightly build at this time, bit of trial and error but this seems good.
-  schedule:
-    - cron: "0 6 * * *" # master build
-    - cron: "0 12 * * *" # 3.0 build
+  #schedule:
+  #  - cron: "0 6 * * *" # master build
+  #  - cron: "0 12 * * *" # 3.0 build
 
 # We do not want a new unstable build to run whilst we are releasing the current unstable build.
 concurrency: unstable-build-release
